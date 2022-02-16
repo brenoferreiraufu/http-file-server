@@ -13,7 +13,7 @@
 #define FALSE 0
 
 #define PORT 80
-#define LISTEN_BACKLOG 4096
+#define LISTEN_BACKLOG 1024
 #define REQUEST_BUFFER_SIZE 8192
 #define FILENAME_SIZE 256
 #define HTTP_STATUS_404 "HTTP/1.0 404 Not Found\r\n \
@@ -43,7 +43,7 @@ void *connection_handler(void *arg)
     char filename[FILENAME_SIZE] = {'\0'};
     int client_sock = (long)arg;
     int data_length, bytes_written;
-    int fsize, bytes_read;
+    int file_size, bytes_read;
     FILE *file;
 
     /******************************************************/
@@ -94,7 +94,7 @@ void *connection_handler(void *arg)
         printf("[*] Client %d: Sending not found response.\n", client_sock);
         if (bytes_written == ERROR)
         {
-            perror("[-] Failed to send data.\n");
+            perror("[-] Failed to send headers.\n");
             close(client_sock);
             pthread_exit(NULL);
         }
@@ -106,60 +106,55 @@ void *connection_handler(void *arg)
     printf("[+] Client %d: Found file %s\n", client_sock, filename);
 
     /******************************************************/
-    /* Envia os dados do arquivo para o cliente.          */
+    /* Lê o arquivo e coloca ele na memória.              */
     /******************************************************/
 
     fseek(file, 0, SEEK_END);
-    fsize = ftell(file);
+    file_size = ftell(file);
     rewind(file);
 
-    printf("[+] Client %d: File contains %ld bytes!\n", client_sock, fsize);
+    char rbuffer[file_size];
+
+    printf("[+] Client %d: File contains %ld bytes!\n", client_sock, file_size);
+
+    bytes_read = fread(rbuffer, sizeof(char), file_size, file);
+
+    if (bytes_read < 0)
+    {
+        perror("[-] ERROR reading from file\n");
+        fclose(file);
+        close(client_sock);
+        pthread_exit(NULL);
+    }
+
+    fclose(file);
+
+    /******************************************************/
+    /* Envia o arquivo para o cliente.                    */
+    /******************************************************/
 
     bytes_written = send(client_sock, HTTP_STATUS_200, strlen(HTTP_STATUS_200), 0);
 
-    printf("[*] Client %d: Sending ok response headers.\n", client_sock);
+    printf("[*] Client %d: Sending response headers.\n", client_sock);
+    if (bytes_written == ERROR)
+    {
+        perror("[-] Failed to send headers.\n");
+        close(client_sock);
+        pthread_exit(NULL);
+    }
+
+    bytes_written = send(client_sock, rbuffer, file_size, 0);
+
+    printf("[*] Client %d: Sending response data.\n", client_sock);
     if (bytes_written == ERROR)
     {
         perror("[-] Failed to send data.\n");
         close(client_sock);
-        fclose(file);
         pthread_exit(NULL);
-    }
-
-    printf("[*] Client %d: Sending file...\n", client_sock);
-    while (TRUE)
-    {
-        bytes_read = fread(buffer, sizeof(char), sizeof(buffer), file);
-        if (bytes_read == 0)
-            break;
-
-        if (bytes_read < 0)
-        {
-            perror("[-] ERROR reading from file\n");
-            fclose(file);
-            close(client_sock);
-            pthread_exit(NULL);
-        }
-
-        while (bytes_read > 0)
-        {
-            bytes_written = send(client_sock, buffer, bytes_read, 0);
-
-            if (bytes_written == ERROR)
-            {
-                perror("[-] Failed to send data.\n");
-                close(client_sock);
-                fclose(file);
-                pthread_exit(NULL);
-            }
-
-            bytes_read -= bytes_written;
-        }
     }
 
     printf("[+] Client %d: Successful sent data.\n", client_sock);
 
-    fclose(file);
     close(client_sock);
     pthread_exit(NULL);
 }
