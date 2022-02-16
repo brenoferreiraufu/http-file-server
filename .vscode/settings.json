@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "ioctl.h": "c",
+        "locale": "c",
+        "in.h": "c",
+        "time.h": "c"
+    }
+}
