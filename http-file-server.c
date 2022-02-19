@@ -13,9 +13,11 @@
 #define FALSE 0
 
 #define PORT 80
-#define LISTEN_BACKLOG 1024
+#define LISTEN_BACKLOG 4096
 #define REQUEST_BUFFER_SIZE 8192
 #define FILENAME_SIZE 256
+#define DATA_LENGTH 65535 * 16
+
 #define HTTP_STATUS_404 "HTTP/1.0 404 Not Found\r\n \
                         Connection: Closed\r\n\n"
 #define HTTP_STATUS_200 "HTTP/1.0 200 OK\r\n \
@@ -39,8 +41,9 @@ void guard(char *fail, char *success)
 
 void *connection_handler(void *arg)
 {
-    char buffer[REQUEST_BUFFER_SIZE];
+    char buffer[REQUEST_BUFFER_SIZE] = {'\0'};
     char filename[FILENAME_SIZE] = {'\0'};
+    char rbuffer[DATA_LENGTH];
     int client_sock = (long)arg;
     int data_length, bytes_written;
     int file_size, bytes_read;
@@ -52,7 +55,7 @@ void *connection_handler(void *arg)
 
     data_length = recv(client_sock, buffer, sizeof(buffer), 0);
 
-    printf("[*] Client %d: Trying to collect request.\n", client_sock);
+    // printf("[*] Client %d: Trying to collect request.\n", client_sock);
     if (data_length == ERROR)
     {
         perror("Failed to recieve data.\n");
@@ -63,10 +66,11 @@ void *connection_handler(void *arg)
     if (data_length == 0)
     {
         printf("[+] Client %d: Closed connection.\n", client_sock);
+        close(client_sock);
         pthread_exit(NULL);
     }
 
-    printf("[+] Client %d: Successful received data.\n", client_sock);
+    // printf("[+] Client %d: Successful received data.\n", client_sock);
 
     /******************************************************/
     /* Lê a requisição para pegar o nome do arquivo.      */
@@ -75,17 +79,17 @@ void *connection_handler(void *arg)
     int start = strcspn(buffer, "/") + 1;
     int end = strcspn(buffer, "\r") - 14;
     strncpy(filename, buffer + start, end);
-    
-    if (strlen(filename) == 0) 
+
+    if (strlen(filename) == 0)
         strcat(filename, "index.html");
 
     /******************************************************/
     /* Tenta abrir o arquivo para ler os dados.           */
     /******************************************************/
 
+    //printf("[*] Client %d: Trying to open file.\n", client_sock);
     file = fopen(filename, "rb");
 
-    printf("[*] Client %d: Trying to open file.\n", client_sock);
     if (file == NULL)
     {
         perror("[-] File not found.\n");
@@ -103,31 +107,7 @@ void *connection_handler(void *arg)
         pthread_exit(NULL);
     }
 
-    printf("[+] Client %d: Found file %s\n", client_sock, filename);
-
-    /******************************************************/
-    /* Lê o arquivo e coloca ele na memória.              */
-    /******************************************************/
-
-    fseek(file, 0, SEEK_END);
-    file_size = ftell(file);
-    rewind(file);
-
-    char rbuffer[file_size];
-
-    printf("[+] Client %d: File contains %ld bytes!\n", client_sock, file_size);
-
-    bytes_read = fread(rbuffer, sizeof(char), file_size, file);
-
-    if (bytes_read < 0)
-    {
-        perror("[-] ERROR reading from file\n");
-        fclose(file);
-        close(client_sock);
-        pthread_exit(NULL);
-    }
-
-    fclose(file);
+    // printf("[+] Client %d: Found file %s\n", client_sock, filename);
 
     /******************************************************/
     /* Envia o arquivo para o cliente.                    */
@@ -135,25 +115,44 @@ void *connection_handler(void *arg)
 
     bytes_written = send(client_sock, HTTP_STATUS_200, strlen(HTTP_STATUS_200), 0);
 
-    printf("[*] Client %d: Sending response headers.\n", client_sock);
+    // printf("[*] Client %d: Sending response headers.\n", client_sock);
     if (bytes_written == ERROR)
     {
         perror("[-] Failed to send headers.\n");
+        fclose(file);
         close(client_sock);
         pthread_exit(NULL);
     }
 
-    bytes_written = send(client_sock, rbuffer, file_size, 0);
-
-    printf("[*] Client %d: Sending response data.\n", client_sock);
-    if (bytes_written == ERROR)
+    do
     {
-        perror("[-] Failed to send data.\n");
-        close(client_sock);
-        pthread_exit(NULL);
-    }
+        bytes_read = fread(rbuffer, sizeof(char), DATA_LENGTH, file);
 
-    printf("[+] Client %d: Successful sent data.\n", client_sock);
+        if (ferror(file))
+        {
+            perror("[-] ERROR reading from file\n");
+            fclose(file);
+            close(client_sock);
+            pthread_exit(NULL);
+        }
+;
+        if (bytes_read == 0) {
+            fclose(file);
+            break;
+        }
+
+        bytes_written = send(client_sock, rbuffer, bytes_read, 0);
+ 
+        if (bytes_written == ERROR)
+        {
+            perror("[-] Failed to send data.\n");
+            fclose(file);
+            close(client_sock);
+            pthread_exit(NULL);
+        }
+    } while (TRUE);
+
+    // printf("[+] Client %d: Successful sent data.\n", client_sock);
 
     close(client_sock);
     pthread_exit(NULL);
@@ -249,8 +248,8 @@ int main(int argc, char const *argv[])
         if (status != SUCCESS)
         {
             perror("[-] Failed to create a new pthread.\n");
-            close(server_sock);
             close(client_sock);
+            close(server_sock);
             exit(EXIT_FAILURE);
         }
 
@@ -269,7 +268,7 @@ int main(int argc, char const *argv[])
             exit(EXIT_FAILURE);
         }
 
-        printf("[+] New detached thread created for connection %d.\n", client_sock);
+        // printf("[+] New detached thread created for connection %d.\n", client_sock);
     } while (TRUE);
 
     return 0;
